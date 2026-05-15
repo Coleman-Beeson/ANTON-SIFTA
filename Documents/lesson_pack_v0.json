@@ -1,0 +1,224 @@
+{
+  "schema": "SIFTA_LESSON_PACK_V0",
+  "truth_label": "SIFTA_ALICE_LESSON_MODE_V0",
+  "name": "WordAce Starter Pack",
+  "audience": "ages 3-8",
+  "levels": [
+    {
+      "id": "L1_letters",
+      "name": "Letters Together",
+      "kind": "letter_sequence",
+      "items": [
+        {
+          "id": "abc",
+          "show": "A B C",
+          "say": "ABC",
+          "alternates": ["A B C", "a b c"]
+        },
+        {
+          "id": "sat",
+          "show": "S A T",
+          "say": "SAT",
+          "alternates": ["S A T", "s a t"]
+        },
+        {
+          "id": "pin",
+          "show": "P I N",
+          "say": "PIN",
+          "alternates": ["P I N", "p i n"]
+        },
+        {
+          "id": "dog",
+          "show": "D O G",
+          "say": "DOG",
+          "alternates": ["D O G", "d o g"]
+        }
+      ]
+    },
+    {
+      "id": "L2_cvc_short_a",
+      "name": "Short A Words",
+      "kind": "word",
+      "items": [
+        {
+          "id": "cat",
+          "show": "cat",
+          "say": "cat",
+          "phoneme": "short a",
+          "alternates": ["kat"]
+        },
+        {
+          "id": "bat",
+          "show": "bat",
+          "say": "bat",
+          "phoneme": "short a"
+        },
+        {
+          "id": "hat",
+          "show": "hat",
+          "say": "hat",
+          "phoneme": "short a"
+        },
+        {
+          "id": "mat",
+          "show": "mat",
+          "say": "mat",
+          "phoneme": "short a"
+        },
+        {
+          "id": "ran",
+          "show": "ran",
+          "say": "ran",
+          "phoneme": "short a"
+        },
+        {
+          "id": "man",
+          "show": "man",
+          "say": "man",
+          "phoneme": "short a"
+        },
+        {
+          "id": "tan",
+          "show": "tan",
+          "say": "tan",
+          "phoneme": "short a"
+        },
+        {
+          "id": "can",
+          "show": "can",
+          "say": "can",
+          "phoneme": "short a"
+        }
+      ]
+    },
+    {
+      "id": "L3_letter_sounds",
+      "name": "Letter Sounds",
+      "kind": "phoneme",
+      "items": [
+        {
+          "id": "m_sound",
+          "show": "M",
+          "say": "mmm",
+          "phoneme": "/m/",
+          "alternates": ["m"]
+        },
+        {
+          "id": "s_sound",
+          "show": "S",
+          "say": "sss",
+          "phoneme": "/s/",
+          "alternates": ["s"]
+        },
+        {
+          "id": "t_sound",
+          "show": "T",
+          "say": "t",
+          "phoneme": "/t/"
+        },
+        {
+          "id": "p_sound",
+          "show": "P",
+          "say": "p",
+          "phoneme": "/p/"
+        }
+      ]
+    },
+    {
+      "id": "L4_blends",
+      "name": "Friendly Blends",
+      "kind": "word",
+      "items": [
+        {
+          "id": "ship",
+          "show": "ship",
+          "say": "ship",
+          "phoneme": "sh"
+        },
+        {
+          "id": "thin",
+          "show": "thin",
+          "say": "thin",
+          "phoneme": "th"
+        },
+        {
+          "id": "chip",
+          "show": "chip",
+          "say": "chip",
+          "phoneme": "ch"
+        },
+        {
+          "id": "shop",
+          "show": "shop",
+          "say": "shop",
+          "phoneme": "sh"
+        }
+      ]
+    },
+    {
+      "id": "L5_sight_words",
+      "name": "Sight Words",
+      "kind": "word",
+      "items": [
+        {
+          "id": "the",
+          "show": "the",
+          "say": "the"
+        },
+        {
+          "id": "and",
+          "show": "and",
+          "say": "and"
+        },
+        {
+          "id": "you",
+          "show": "you",
+          "say": "you"
+        },
+        {
+          "id": "see",
+          "show": "see",
+          "say": "see",
+          "alternates": ["sea"]
+        },
+        {
+          "id": "was",
+          "show": "was",
+          "say": "was"
+        },
+        {
+          "id": "said",
+          "show": "said",
+          "say": "said"
+        }
+      ]
+    },
+    {
+      "id": "L6_sentences",
+      "name": "Tiny Sentences",
+      "kind": "sentence",
+      "items": [
+        {
+          "id": "cat_sat",
+          "show": "The cat sat.",
+          "say": "The cat sat."
+        },
+        {
+          "id": "man_ran",
+          "show": "The man ran.",
+          "say": "The man ran."
+        },
+        {
+          "id": "i_see_you",
+          "show": "I see you.",
+          "say": "I see you."
+        },
+        {
+          "id": "the_hat",
+          "show": "The hat is red.",
+          "say": "The hat is red."
+        }
+      ]
+    }
+  ]
+}

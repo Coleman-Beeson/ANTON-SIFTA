@@ -28,6 +28,8 @@ from typing import Optional
 _STATE = Path.home() / ".sifta_state"
 _THEME_FILE = _STATE / "desktop_theme.json"
 _REPO = Path(__file__).resolve().parent.parent
+_REPO_STATE = _REPO / ".sifta_state"
+_CUSTOM_WALLPAPER_FILE = _REPO_STATE / "desktop_wallpaper.json"
 
 
 # ──────────────────────────────────────────────────────────────
@@ -213,6 +215,13 @@ def active_palette() -> DesktopPalette:
 
 def wallpaper_path(palette: Optional[DesktopPalette] = None) -> str:
     """Resolve absolute wallpaper path for the given palette."""
+    custom = load_custom_wallpaper_path()
+    if custom:
+        p = Path(custom)
+        if p.exists():
+            return str(p)
+    if custom == "":
+        return ""
     p = palette or active_palette()
     candidate = _REPO / "Library" / "Desktop Pictures" / p.wallpaper_filename
     if candidate.exists():
@@ -220,6 +229,61 @@ def wallpaper_path(palette: Optional[DesktopPalette] = None) -> str:
     # fallback to static
     fallback = _REPO / "static" / "mermaid_os_wallpaper.png"
     return str(fallback) if fallback.exists() else ""
+
+
+def list_stock_wallpapers() -> list[dict[str, str]]:
+    """Return bundled desktop pictures as UI-friendly metadata."""
+    base = _REPO / "Library" / "Desktop Pictures"
+    rows: list[dict[str, str]] = []
+    if base.exists():
+        for path in sorted(base.iterdir()):
+            if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".heic", ".avif", ".svg"}:
+                continue
+            rows.append({
+                "id": path.stem,
+                "name": path.stem.replace("_", " "),
+                "path": str(path),
+            })
+    return rows
+
+
+def load_custom_wallpaper_path() -> Optional[str]:
+    """Read Settings -> Appearance custom wallpaper override.
+
+    Returns:
+        ``None`` when no choice has been made, ``""`` when wallpaper is
+        explicitly disabled, or an absolute/expanded path string.
+    """
+    try:
+        data = json.loads(_CUSTOM_WALLPAPER_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if "path" not in data:
+        return None
+    raw = data.get("path")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return ""
+    return str(Path(text).expanduser())
+
+
+def save_custom_wallpaper_path(path: Optional[str]) -> None:
+    """Persist custom wallpaper override under the repo-local state dir."""
+    _REPO_STATE.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "path": "" if path == "" else (str(Path(path).expanduser()) if path else None),
+        "changed_at": time.time(),
+    }
+    _CUSTOM_WALLPAPER_FILE.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 # ──────────────────────────────────────────────────────────────
