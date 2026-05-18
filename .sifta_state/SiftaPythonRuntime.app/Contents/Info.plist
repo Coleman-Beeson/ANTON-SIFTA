@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.antonpictures.siftapython.runtime</string>
+  <key>CFBundleName</key>
+  <string>SiftaPythonRuntime</string>
+  <key>CFBundleDisplayName</key>
+  <string>SiftaPythonRuntime</string>
+  <key>CFBundleExecutable</key>
+  <string>python3</string>
+  <key>CFBundleVersion</key>
+  <string>1.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>NSCameraUsageDescription</key>
+  <string>SIFTA needs Camera access for Alice's visual organ on this local Mac.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>SIFTA needs Microphone access for Alice's auditory organ on this local Mac.</string>
+</dict>
+</plist>

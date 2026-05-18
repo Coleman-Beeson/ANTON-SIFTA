@@ -1,219 +1,397 @@
 #!/usr/bin/env python3
-"""Small Traveling Salesman demo widget.
+"""
+Applications/sifta_tsp_widget.py
+══════════════════════════════════════════════════════════════════════
+StigAuth: SIFTA_TSP_WIDGET_V1
+
+A concrete general-problem-solving demo for the Architect's question
+"where is the app in the os?". Alice does NOT claim she solves
+Traveling Salesman herself — she routes the problem to a deterministic
+solver, returns the route, and writes a receipt naming the solver +
+the input hash so the work is auditable.
+
+Solvers
+-------
+
+The widget picks the strongest available solver at runtime:
+
+  * OR-Tools (Google's combinatorial optimization library) if it
+    is installed locally — produces an exact / high-quality route on
+    small N.
+  * Nearest-neighbour greedy + 2-opt local search — pure-Python
+    fallback that is honest about being a heuristic. Always available.
 
 Truth label: ``SIFTA_TSP_DEMO_V1``.
 
-The widget keeps the manifest target real on fresh installs. It uses a
-deterministic nearest-neighbour route and writes a receipt for each solve.
-That is enough for the desktop app surface and for the singleton guard; larger
-ACO / OR-Tools solvers can replace ``solve_nearest_neighbor`` behind the same
-receipt boundary later.
+Architect 2026-05-13 (verbatim): *"traveling salesman app... where is
+the app in the os?"*. This is the app.
+
+Architect 2026-05-14 — **TSPLIB-class real instances**, gradient map,
+triple-IDE co-build charter: see ``Documents/OS_OPTIMIZATION_SURPRISE_SAMPLING_TOURNAMENT_2026-05-12.md`` **§4.10**.
 """
 from __future__ import annotations
 
-import hashlib
 import json
-import math
 import random
 import sys
-import time
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import List, Optional, Sequence, Tuple
 
-from PyQt6.QtCore import QPointF, Qt
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtCore import Qt, QPointF, QRectF
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QPolygonF,
+)
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSpinBox,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from System.swarm_tsp_solver import TRUTH_LABEL, solve_tsp  # noqa: E402
+from System.tsplib_parser import TsplibInstance, load_tsplib_path  # noqa: E402
+
 _REPO = Path(__file__).resolve().parent.parent
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
-
 _STATE = _REPO / ".sifta_state"
-_LEDGER = _STATE / "tsp_receipts.jsonl"
-
-TRUTH_LABEL = "SIFTA_TSP_DEMO_V1"
-
-
-def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
-    return math.hypot(a[0] - b[0], a[1] - b[1])
+_STATE.mkdir(parents=True, exist_ok=True)
+TSP_LEDGER = _STATE / "tsp_runs.jsonl"
+_BUNDLED_DEMO = _REPO / "assets" / "tsplib" / "sifta_demo12.tsp"
 
 
-def solve_nearest_neighbor(points: Iterable[tuple[float, float]]) -> dict:
-    pts = list(points)
-    if not pts:
-        return {"route": [], "distance": 0.0, "solver": "nearest_neighbor"}
-    remaining = set(range(1, len(pts)))
-    route = [0]
-    while remaining:
-        cur = route[-1]
-        nxt = min(remaining, key=lambda i: (_dist(pts[cur], pts[i]), i))
-        route.append(nxt)
-        remaining.remove(nxt)
-    total = sum(_dist(pts[a], pts[b]) for a, b in zip(route, route[1:]))
-    if len(route) > 1:
-        total += _dist(pts[route[-1]], pts[route[0]])
-    return {
-        "route": route,
-        "distance": round(total, 4),
-        "solver": "nearest_neighbor",
-    }
+# ── solver layer ─────────────────────────────────────────────────────────
+# The solver core lives in System/swarm_tsp_solver.py so it stays
+# importable without PyQt6 (tests, CI, headless scripts).
 
 
-def write_receipt(receipt: dict) -> dict:
-    row = dict(receipt)
-    row.setdefault("ts", time.time())
-    row.setdefault("truth_label", TRUTH_LABEL)
-    payload = json.dumps(row, sort_keys=True, separators=(",", ":"), default=str)
-    row["sha256"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    _STATE.mkdir(parents=True, exist_ok=True)
-    with _LEDGER.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(row, sort_keys=True) + "\n")
-    return row
+def write_receipt(receipt: dict) -> None:
+    try:
+        with TSP_LEDGER.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(receipt, sort_keys=True, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
-class _TSPCanvas(QWidget):
+# ── UI ─────────────────────────────────────────────────────────────────
+
+
+class TSPCanvas(QWidget):
+    """Matplotlib-free canvas: cities + closed tour + TSPLIB-style labels."""
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.points: list[tuple[float, float]] = []
-        self.route: list[int] = []
-        self.setMinimumHeight(320)
+        self.setMinimumSize(480, 360)
+        self.coords: List[Tuple[float, float]] = []
+        self.labels: List[str] = []
+        self.tour: List[int] = []
+        self.instance_title: str = ""
+        self.setStyleSheet("background-color: #0a0d12; border-radius: 8px;")
 
-    def paintEvent(self, _event) -> None:  # noqa: N802 - Qt API
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor(11, 14, 24))
-        if not self.points:
+    def set_data(
+        self,
+        coords: Sequence[Tuple[float, float]],
+        tour: Sequence[int],
+        *,
+        labels: Sequence[str] | None = None,
+        instance_title: str = "",
+    ) -> None:
+        self.coords = [tuple(c) for c in coords]
+        self.labels = (
+            list(labels) if labels is not None else [str(i) for i in range(len(self.coords))]
+        )
+        while len(self.labels) < len(self.coords):
+            self.labels.append(str(len(self.labels)))
+        self.tour = list(tour)
+        self.instance_title = instance_title
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = self.rect().adjusted(2, 2, -2, -2)
+        grad = QLinearGradient(r.topLeft(), r.bottomRight())
+        grad.setColorAt(0.0, QColor(18, 22, 34))
+        grad.setColorAt(0.45, QColor(12, 18, 28))
+        grad.setColorAt(1.0, QColor(8, 12, 22))
+        p.fillRect(self.rect(), grad)
+
+        if not self.coords:
+            p.setPen(QColor(140, 160, 190))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No cities — pick a preset or load .tsp")
             return
 
-        w = max(1, self.width())
-        h = max(1, self.height())
+        margin = 36
+        w = self.width() - 2 * margin
+        h = self.height() - 2 * margin
+        xs = [c[0] for c in self.coords]
+        ys = [c[1] for c in self.coords]
+        xmin, xmax = min(xs), max(xs)
+        ymin, ymax = min(ys), max(ys)
+        xspan = max(1e-6, xmax - xmin)
+        yspan = max(1e-6, ymax - ymin)
+        pad = 0.04 * max(xspan, yspan)
 
-        def map_point(p: tuple[float, float]) -> QPointF:
-            return QPointF(30 + p[0] * (w - 60), 30 + p[1] * (h - 60))
+        def project(c: Tuple[float, float]) -> QPointF:
+            x = margin + ((c[0] - xmin + pad) / (xspan + 2 * pad)) * w
+            y = margin + ((c[1] - ymin + pad) / (yspan + 2 * pad)) * h
+            return QPointF(x, y)
 
-        if len(self.route) > 1:
-            painter.setPen(QPen(QColor(255, 210, 63), 3))
-            ordered = self.route + [self.route[0]]
-            for a, b in zip(ordered, ordered[1:]):
-                painter.drawLine(map_point(self.points[a]), map_point(self.points[b]))
+        if self.instance_title:
+            p.setPen(QColor(120, 200, 255))
+            p.setFont(QFont("Menlo", 11, QFont.Weight.Bold))
+            p.drawText(QRectF(12, 8, self.width() - 24, 22), self.instance_title)
 
-        painter.setPen(QPen(QColor(0, 255, 200), 2))
-        painter.setBrush(QColor(0, 187, 249))
-        for idx, p in enumerate(self.points):
-            q = map_point(p)
-            painter.drawEllipse(q, 6, 6)
-            painter.drawText(q + QPointF(8, -8), str(idx + 1))
+        # Route glow + line
+        if self.tour and len(self.tour) >= 2:
+            pts = [project(self.coords[i]) for i in self.tour if 0 <= i < len(self.coords)]
+            if len(pts) >= 2:
+                pen_glow = QPen(QColor(0, 220, 200, 70), 8)
+                p.setPen(pen_glow)
+                poly = QPolygonF(pts)
+                p.drawPolyline(poly)
+                pen = QPen(QColor(64, 255, 220), 2.2)
+                p.setPen(pen)
+                p.drawPolyline(poly)
+
+        # Cities
+        for i, c in enumerate(self.coords):
+            pt = project(c)
+            lab = self.labels[i] if i < len(self.labels) else str(i)
+            p.setPen(QPen(QColor(255, 200, 120), 1))
+            p.setBrush(QColor(255, 210, 90))
+            p.drawEllipse(pt, 5.5, 5.5)
+            p.setPen(QColor(230, 235, 245))
+            p.setFont(QFont("Menlo", 8))
+            p.drawText(pt + QPointF(8, -8), lab)
 
 
 class TSPWidget(QWidget):
+    """SIFTA Traveling Salesman demo widget (singleton per §7.6.2)."""
+
     _live_instance: Optional["TSPWidget"] = None
     _initialized_instance_ids: set[int] = set()
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args, **kwargs):  # noqa: ANN002
         existing = cls._live_instance
         if existing is not None:
             try:
                 _ = existing.isVisible()
-                existing.show()
-                existing.raise_()
-                existing.activateWindow()
+                try:
+                    existing.show()
+                    existing.raise_()
+                    existing.activateWindow()
+                except Exception:
+                    pass
                 return existing
             except RuntimeError:
                 cls._live_instance = None
         return super().__new__(cls)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
+        # Keep the singleton re-entry guard outside the PyQt object.
+        # Accessing Python attrs before QWidget.__init__ can trip SIP's
+        # "super-class __init__ was never called" check on fresh wrappers.
         if id(self) in type(self)._initialized_instance_ids:
             return
         super().__init__(parent)
+
         self.setWindowTitle("SIFTA — Traveling Salesman")
-        self.resize(720, 560)
-        self.setStyleSheet(
-            "QWidget { background: #0b0e18; color: #e8edff; font-family: Menlo; }"
-            "QPushButton, QSpinBox { background: #1b2340; color: #e8edff; "
-            "border: 1px solid #41507d; border-radius: 6px; padding: 6px; }"
-            "QPushButton:hover { border-color: #00ffc8; }"
+        self.resize(780, 620)
+
+        self._rng = random.Random(0)
+        self._labels: List[str] = []
+        self._time_limit = 2.0
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(8)
+
+        title = QLabel("SIFTA — Traveling Salesman")
+        title.setFont(QFont("Menlo", 15, QFont.Weight.Bold))
+        outer.addWidget(title)
+
+        sub = QLabel(
+            "Alice routes the problem to the strongest available solver "
+            "(stigmergic swimmers → OR-Tools → nearest-neighbour+2-opt) and "
+            "returns the route + a signed receipt. Load **TSPLIB** "
+            "``EUC_2D`` instances or the bundled demo — see optimization plan **§4.10**."
         )
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color:#aab;")
+        outer.addWidget(sub)
 
-        self._rng = random.Random(42)
-        self._points: list[tuple[float, float]] = []
-        self._route: list[int] = []
+        links = QLabel(
+            "<span style='color:#8ab4ff'>Data:</span> "
+            "<a href='http://comopt.ifi.uni-heidelberg.de/software/TSPLIB95/tsp/'>TSPLIB95</a> · "
+            "<a href='https://www.math.uwaterloo.ca/tsp/world/country.html'>National TSP (Waterloo)</a> · "
+            "<span style='color:#8ab4ff'>Solvers:</span> pip install <b>ortools</b> · "
+            "GA research lane = <b>HYPOTHESIS</b> (not shipped in v1 widget)."
+        )
+        links.setOpenExternalLinks(True)
+        links.setWordWrap(True)
+        outer.addWidget(links)
 
-        title = QLabel("Traveling Salesman")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size: 22px; font-weight: 800; color: #FFD23F;")
-        self._status = QLabel("Ready.")
-        self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status.setWordWrap(True)
-
-        self._count = QSpinBox(self)
-        self._count.setRange(3, 30)
-        self._count.setValue(12)
-        self._canvas = _TSPCanvas(self)
-
-        solve_btn = QPushButton("Solve")
-        solve_btn.clicked.connect(self._solve)
-        reshuffle_btn = QPushButton("New Map")
-        reshuffle_btn.clicked.connect(self._new_map)
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Preset:"))
+        self.preset = QComboBox()
+        self.preset.addItems(
+            [
+                "Random Euclidean (spinbox N)",
+                "Bundled TSPLIB — sifta_demo12 (12 cities)",
+                "Load .tsp file…",
+            ]
+        )
+        self.preset.setCurrentIndex(1)
+        self.preset.currentIndexChanged.connect(self._on_preset_changed)
+        preset_row.addWidget(self.preset, 1)
+        outer.addLayout(preset_row)
 
         controls = QHBoxLayout()
-        controls.addWidget(QLabel("Cities"))
-        controls.addWidget(self._count)
-        controls.addWidget(reshuffle_btn)
-        controls.addWidget(solve_btn)
+        controls.addWidget(QLabel("N (random):"))
+        self.n_spin = QSpinBox()
+        self.n_spin.setRange(3, 60)
+        self.n_spin.setValue(12)
+        self.n_spin.valueChanged.connect(self._maybe_refresh_random)
+        controls.addWidget(self.n_spin)
+        self.btn_random = QPushButton("Random + Solve")
+        self.btn_random.clicked.connect(self._solve_random)
+        controls.addWidget(self.btn_random)
+        self.btn_solve_preset = QPushButton("Solve preset")
+        self.btn_solve_preset.clicked.connect(self._solve_from_preset)
+        controls.addWidget(self.btn_solve_preset)
+        controls.addStretch(1)
+        outer.addLayout(controls)
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(title)
-        layout.addLayout(controls)
-        layout.addWidget(self._canvas, 1)
-        layout.addWidget(self._status)
+        self.canvas = TSPCanvas()
+        outer.addWidget(self.canvas, 1)
 
-        self._new_map()
+        self.receipt_view = QTextEdit()
+        self.receipt_view.setReadOnly(True)
+        self.receipt_view.setFont(QFont("Menlo", 10))
+        self.receipt_view.setFixedHeight(130)
+        outer.addWidget(self.receipt_view)
+
+        self._solve_from_preset()
         type(self)._live_instance = self
         type(self)._initialized_instance_ids.add(id(self))
 
-    def _new_map(self) -> None:
-        n = int(self._count.value())
-        self._points = [(self._rng.random(), self._rng.random()) for _ in range(n)]
-        self._route = []
-        self._canvas.points = self._points
-        self._canvas.route = self._route
-        self._canvas.update()
-        self._status.setText(f"Generated {n} cities. Receipt will be written on solve.")
-
-    def _solve(self) -> None:
-        result = solve_nearest_neighbor(self._points)
-        self._route = list(result["route"])
-        self._canvas.route = self._route
-        self._canvas.update()
-        receipt = write_receipt({
-            "event": "TSP_SOLVE",
-            "solver": result["solver"],
-            "city_count": len(self._points),
-            "route": self._route,
-            "distance": result["distance"],
-        })
-        self._status.setText(
-            f"{result['solver']} distance {result['distance']:.2f}; "
-            f"receipt {receipt['sha256'][:12]}..."
-        )
-
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
-        type(self)._live_instance = None
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if type(self)._live_instance is self:
+            type(self)._live_instance = None
         type(self)._initialized_instance_ids.discard(id(self))
         super().closeEvent(event)
 
+    def _on_preset_changed(self, _idx: int) -> None:
+        self.n_spin.setEnabled(self.preset.currentIndex() == 0)
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
+    def _maybe_refresh_random(self) -> None:
+        if self.preset.currentIndex() == 0:
+            self._solve_random()
+
+    def _solve_random(self) -> None:
+        n = int(self.n_spin.value())
+        coords = [
+            (self._rng.uniform(0.0, 100.0), self._rng.uniform(0.0, 100.0))
+            for _ in range(n)
+        ]
+        self._labels = [str(i) for i in range(n)]
+        receipt = solve_tsp(coords, time_limit_s=self._time_limit, instance_name=f"random_euclidean_n{n}")
+        write_receipt(receipt)
+        self.canvas.set_data(
+            coords,
+            receipt["tour"],
+            labels=self._labels,
+            instance_title=f"Random Euclidean · N={n}",
+        )
+        self._show_receipt(receipt)
+
+    def _solve_from_preset(self) -> None:
+        idx = self.preset.currentIndex()
+        if idx == 0:
+            self._solve_random()
+            return
+        if idx == 1:
+            if not _BUNDLED_DEMO.is_file():
+                self.receipt_view.setPlainText(f"Missing bundled file: {_BUNDLED_DEMO}")
+                return
+            inst = load_tsplib_path(_BUNDLED_DEMO)
+            self._run_instance(inst)
+            return
+        if idx == 2:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Open TSPLIB .tsp",
+                str(_REPO / "assets" / "tsplib"),
+                "TSPLIB (*.tsp);;All (*)",
+            )
+            if not path:
+                return
+            inst = load_tsplib_path(Path(path))
+            self._run_instance(inst)
+
+    def _run_instance(self, inst: TsplibInstance) -> None:
+        self._labels = list(inst.labels)
+        n = len(inst.coords)
+        # Large TSPLIB: give OR-Tools more time when N > 30
+        tl = 4.0 if n > 40 else self._time_limit
+        receipt = solve_tsp(
+            inst.coords,
+            time_limit_s=tl,
+            instance_name=inst.name,
+        )
+        write_receipt(receipt)
+        title = inst.name
+        if inst.source_path:
+            title = f"{inst.name}  ·  {Path(inst.source_path).name}"
+        self.canvas.set_data(
+            inst.coords,
+            receipt["tour"],
+            labels=self._labels,
+            instance_title=title,
+        )
+        self._show_receipt(receipt, extra_source=inst.source_path)
+
+    def _show_receipt(self, receipt: dict, extra_source: str | None = None) -> None:
+        lines = [
+            f"INSTANCE: {receipt.get('instance_name', '(random)')}",
+            f"SOLVER: {receipt['solver']}",
+            f"N: {receipt['n']}",
+            f"TOTAL_DISTANCE: {receipt['total_distance']:.4f}",
+            f"INPUT_SHA: {receipt.get('input_sha12', '')}",
+            f"TRUTH_LABEL: {receipt.get('truth_label', TRUTH_LABEL)}",
+        ]
+        if receipt.get("exact_distance") is not None:
+            lines.append(f"EXACT_DISTANCE: {receipt['exact_distance']:.4f}")
+        if receipt.get("exact_gap") is not None:
+            lines.append(f"EXACT_GAP: {receipt['exact_gap']:.4f}")
+        lines.extend(
+            [
+                f"TRUTH_NOTE: {receipt['truth_note']}",
+                f"TRACE_ID: {receipt['trace_id']}",
+            ]
+        )
+        if extra_source:
+            lines.append(f"SOURCE_FILE: {extra_source}")
+        self.receipt_view.setPlainText("\n".join(lines))
+
+
+def main() -> int:
+    app = QApplication.instance() or QApplication(sys.argv)
     w = TSPWidget()
     w.show()
-    sys.exit(app.exec())
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

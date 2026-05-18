@@ -1,206 +1,269 @@
 #!/usr/bin/env python3
-"""Receipt-backed camera proof summary for Alice's unified eye.
+"""Unified-field camera proof.
 
-Truth label: ``SIFTA_CAMERA_UNIFIED_FIELD_PROOF_V1``.
-
-This module does not open a camera and does not claim recognition from vibes.
-It only summarizes existing ledgers:
-
-* ``visual_stigmergy.jsonl`` for photon/math rows.
-* ``active_eye_identity_frames.jsonl`` for frame identity receipts.
-* ``face_detection_events.jsonl`` for face detector rows.
-* ``kernel_process_table.json`` for organ health hints.
+This organ does not open the camera. It reads existing SIFTA field receipts and
+answers one narrow question: do current ledgers prove the desktop eye is alive,
+and did it see the owner, an unknown user, nobody, or nothing fresh enough to
+trust?
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import time
-import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 _REPO = Path(__file__).resolve().parent.parent
-_STATE = _REPO / ".sifta_state"
-_LEDGER = "camera_unified_field_proof.jsonl"
-
-TRUTH_LABEL = "SIFTA_CAMERA_UNIFIED_FIELD_PROOF_V1"
-FRESH_S = 12.0
+_DEFAULT_STATE = _REPO / ".sifta_state"
+TRUTH_LABEL = "CAMERA_UNIFIED_FIELD_PROOF_V1"
 
 
 @dataclass(frozen=True)
 class CameraUnifiedFieldProof:
     truth_label: str
-    ok: bool
     status: str
+    ok: bool
+    camera_healthy: bool
+    recognition: str
     summary: str
+    face_age_s: float | None
+    frame_age_s: float | None
+    visual_age_s: float | None
+    vision_health: float | None
+    device: str
+    frame_sha8: str
+    face_confidence: float | None
+    face_audience: str
     receipt_id: str
-    device: str = ""
-    frame_sha8: str = ""
-    face_age_s: Optional[float] = None
-    frame_age_s: Optional[float] = None
-    visual_age_s: Optional[float] = None
-    vision_health: str = "unknown"
+    ts: float
+    evidence: dict[str, Any]
 
-    def to_json(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def _latest_jsonl(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
+def _tail_jsonl(path: Path, max_bytes: int = 16384) -> dict[str, Any]:
+    """Return the newest parseable JSON row without loading huge ledgers."""
     try:
-        data = path.read_bytes()
-    except OSError:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            handle.seek(max(0, size - max_bytes))
+            text = handle.read().decode("utf-8", errors="ignore")
+        for line in reversed(text.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                return json.loads(line)
+            except Exception:
+                continue
+    except Exception:
         return {}
-    for raw in data.splitlines()[-200:][::-1]:
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            obj = json.loads(raw.decode("utf-8", errors="replace"))
-        except Exception:
-            continue
-        if isinstance(obj, dict):
-            return obj
     return {}
 
 
-def _latest_json(path: Path) -> dict[str, Any]:
+def _load_kernel_vision(state_dir: Path, now: float) -> tuple[float | None, float | None, str]:
     try:
-        obj = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads((state_dir / "kernel_process_table.json").read_text(encoding="utf-8"))
     except Exception:
-        return {}
-    return obj if isinstance(obj, dict) else {}
+        return None, None, ""
+    for pid, proc in (data.get("processes") or {}).items():
+        if any(token in str(pid).lower() for token in ("vision", "eye", "camera", "e35")):
+            try:
+                health = float(proc.get("health"))
+            except Exception:
+                health = None
+            try:
+                hb_age = max(0.0, now - float(proc.get("last_heartbeat_ts") or 0.0))
+            except Exception:
+                hb_age = None
+            return health, hb_age, str(pid)
+    return None, None, ""
 
 
-def _age(row: dict[str, Any], now: float) -> Optional[float]:
-    for key in ("ts", "timestamp", "time"):
-        try:
-            return round(max(0.0, now - float(row.get(key))), 3)
-        except Exception:
-            pass
-    return None
+def _age(now: float, row: dict[str, Any]) -> float | None:
+    try:
+        ts = float(row.get("ts") or 0.0)
+    except Exception:
+        return None
+    if ts <= 0:
+        return None
+    return max(0.0, now - ts)
 
 
-def _fresh(age: Optional[float]) -> bool:
-    return age is not None and age <= FRESH_S
+def _owner_name() -> str:
+    try:
+        from System.swarm_kernel_identity import owner_display_name
+
+        return owner_display_name() or "owner"
+    except Exception:
+        return "owner"
 
 
-def _frame_sha8(state_dir: Path, frame_row: dict[str, Any], visual_row: dict[str, Any]) -> str:
-    for row in (frame_row, visual_row):
-        for key in ("frame_sha256", "sha256", "frame_hash", "image_sha256"):
-            val = str(row.get(key) or "").strip()
-            if len(val) >= 8:
-                return val[:8]
-    frame = state_dir / "visual_stigmergy_last_frame.jpg"
-    if frame.exists():
-        try:
-            return hashlib.sha256(frame.read_bytes()).hexdigest()[:8]
-        except OSError:
-            return ""
-    return ""
-
-
-def _device(*rows: dict[str, Any]) -> str:
-    for row in rows:
-        for key in ("device", "device_label", "camera_label", "source", "camera"):
-            val = str(row.get(key) or "").strip()
-            if val:
-                return val[:80]
-    return ""
-
-
-def _vision_health(face_row: dict[str, Any], visual_row: dict[str, Any], kpt: dict[str, Any]) -> str:
-    for row in (face_row, visual_row):
-        if row.get("error"):
-            return f"error:{str(row.get('error'))[:48]}"
-        if row.get("status"):
-            return str(row.get("status"))[:64]
-        if row.get("truth"):
-            return str(row.get("truth"))[:64]
-    if kpt:
-        return "kernel_process_table_present"
-    return "no_health_receipts"
+def _receipt_id(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "camera_proof_" + hashlib.sha256(raw).hexdigest()[:16]
 
 
 def build_camera_unified_field_proof(
     state_dir: str | Path | None = None,
     *,
+    now: float | None = None,
+    stale_s: float = 300.0,
     write_receipt: bool = False,
 ) -> CameraUnifiedFieldProof:
-    state = Path(state_dir) if state_dir is not None else _STATE
-    now = time.time()
+    """Build an OBSERVED camera proof from existing unified-field receipts."""
+    state = Path(state_dir) if state_dir is not None else _DEFAULT_STATE
+    t = float(now if now is not None else time.time())
 
-    visual = _latest_jsonl(state / "visual_stigmergy.jsonl")
-    frame = _latest_jsonl(state / "active_eye_identity_frames.jsonl")
-    face = _latest_jsonl(state / "face_detection_events.jsonl")
-    kpt = _latest_json(state / "kernel_process_table.json")
+    face = _tail_jsonl(state / "face_detection_events.jsonl")
+    frame = _tail_jsonl(state / "active_eye_identity_frames.jsonl")
+    visual = _tail_jsonl(state / "visual_stigmergy.jsonl")
+    vision_health, vision_hb_age_s, vision_pid = _load_kernel_vision(state, t)
 
-    visual_age = _age(visual, now)
-    frame_age = _age(frame, now)
-    face_age = _age(face, now)
-    has_fresh = any(_fresh(a) for a in (visual_age, frame_age, face_age))
+    face_age = _age(t, face)
+    frame_age = _age(t, frame)
+    visual_age = _age(t, visual)
 
-    face_count = 0
-    for key in ("faces_detected", "face_count", "faces"):
-        try:
-            val = face.get(key)
-            face_count = len(val) if isinstance(val, list) else int(val)
-            break
-        except Exception:
-            pass
-
-    owner_match = bool(
-        face.get("owner_match")
-        or face.get("owner_recognized")
-        or face.get("identity") == "owner"
+    frame_fresh = frame_age is not None and frame_age <= stale_s
+    visual_fresh = visual_age is not None and visual_age <= stale_s
+    vision_fresh = vision_hb_age_s is not None and vision_hb_age_s <= stale_s
+    vision_known_bad = vision_health is not None and vision_health < 0.5
+    # `active_eye_identity_frames.jsonl` is a saved-PNG support path. It can be
+    # stale while the live visual field and face detector are still fresh. The
+    # health gate is the live photon-derived visual field. The process-table
+    # heartbeat strengthens the proof when present, but a transient snapshot
+    # race must not veto fresh photon + active-eye frame receipts.
+    visual_has_frame_shape = bool(
+        (visual.get("w") and visual.get("h"))
+        or (frame_fresh and frame.get("w") and frame.get("h"))
     )
-    if owner_match and _fresh(face_age):
-        status = "OWNER_RECOGNIZED"
-    elif face_count > 0 and _fresh(face_age):
-        status = "FACE_DETECTED"
-    elif has_fresh:
-        status = "VISION_RECEIPTS_FRESH"
+    camera_healthy = bool(
+        visual_fresh
+        and visual_has_frame_shape
+        and not vision_known_bad
+    )
+
+    audience = str(face.get("audience") or "").strip().lower()
+    try:
+        faces_detected = int(face.get("faces_detected") or 0)
+    except Exception:
+        faces_detected = 0
+    try:
+        conf = float(face.get("confidence")) if face.get("confidence") is not None else None
+    except Exception:
+        conf = None
+
+    face_fresh = face_age is not None and face_age <= stale_s
+    owner_tokens = {"architect", "owner", "owner_self", "primary_operator", "george", "ioan"}
+    if face_fresh and faces_detected > 0 and audience in owner_tokens:
+        recognition = "owner"
+        status = "OWNER_RECOGNIZED" if camera_healthy else "OWNER_SEEN_CAMERA_UNPROVEN"
+    elif face_fresh and faces_detected > 0:
+        recognition = "unknown_user"
+        status = "UNKNOWN_USER_PRESENT" if camera_healthy else "UNKNOWN_USER_CAMERA_UNPROVEN"
+    elif face_fresh and (faces_detected == 0 or audience in {"nobody", "no_face"}):
+        recognition = "no_face"
+        status = "CAMERA_HEALTHY_NO_FACE" if camera_healthy else "NO_FACE_CAMERA_UNPROVEN"
     else:
-        status = "NO_FRESH_RECEIPTS"
+        recognition = "no_fresh_face_receipt"
+        status = "CAMERA_HEALTHY_NO_FACE_PROOF" if camera_healthy else "NOT_PROVEN"
 
-    receipt_id = str(uuid.uuid4())
-    parts = [status.lower().replace("_", " ")]
-    if visual_age is not None:
-        parts.append(f"visual={visual_age:.1f}s")
-    if face_age is not None:
-        parts.append(f"face={face_age:.1f}s")
-    if frame_age is not None:
-        parts.append(f"frame={frame_age:.1f}s")
-    if len(parts) == 1:
-        parts.append("waiting for eye ledgers")
+    ok = status in {"OWNER_RECOGNIZED", "UNKNOWN_USER_PRESENT", "CAMERA_HEALTHY_NO_FACE", "CAMERA_HEALTHY_NO_FACE_PROOF"}
 
+    device = str(frame.get("device") or "") if frame_fresh else ""
+    sha8 = str((frame.get("sha8") if frame_fresh else None) or visual.get("sha8") or "")
+    if status == "OWNER_RECOGNIZED":
+        pct = int(round((conf or 0.0) * 100))
+        summary = f"✓ unified field: eye saw {_owner_name()} {int(face_age or 0)}s ago ({pct}%)"
+    elif status == "UNKNOWN_USER_PRESENT":
+        summary = f"✓ unified field: eye saw an unknown user {int(face_age or 0)}s ago"
+    elif status == "CAMERA_HEALTHY_NO_FACE":
+        summary = f"✓ unified field: camera healthy, no face in view {int(face_age or 0)}s ago"
+    elif status == "CAMERA_HEALTHY_NO_FACE_PROOF":
+        summary = "✓ unified field: camera frames fresh; no fresh face receipt"
+    else:
+        missing = []
+        if not visual_fresh:
+            missing.append("visual_stigmergy")
+        elif not visual_has_frame_shape:
+            missing.append("visual_frame_shape")
+        if vision_known_bad:
+            missing.append("vision_health")
+        if not missing:
+            missing.append("fresh proof")
+        summary = "✗ unified field: not proven (" + ", ".join(missing) + ")"
+
+    evidence = {
+        "face": {
+            "event": face.get("event"),
+            "age_s": face_age,
+            "faces_detected": faces_detected,
+            "audience": audience,
+            "confidence": conf,
+        },
+        "frame": {
+            "event": frame.get("event"),
+            "age_s": frame_age,
+            "device": device,
+            "w": frame.get("w"),
+            "h": frame.get("h"),
+            "sha8": sha8,
+        },
+        "visual": {
+            "age_s": visual_age,
+            "sha8": visual.get("sha8"),
+            "motion_mean": visual.get("motion_mean"),
+            "saliency_peak": visual.get("saliency_peak"),
+        },
+        "kernel": {
+            "pid": vision_pid,
+            "health": vision_health,
+            "heartbeat_age_s": vision_hb_age_s,
+        },
+    }
+    payload = {
+        "truth_label": TRUTH_LABEL,
+        "status": status,
+        "ok": ok,
+        "camera_healthy": camera_healthy,
+        "recognition": recognition,
+        "device": device,
+        "frame_sha8": sha8,
+        "ts": t,
+        "evidence": evidence,
+    }
+    rid = _receipt_id(payload)
     proof = CameraUnifiedFieldProof(
         truth_label=TRUTH_LABEL,
-        ok=has_fresh,
         status=status,
-        summary="eye proof: " + " · ".join(parts),
-        receipt_id=receipt_id,
-        device=_device(visual, frame, face),
-        frame_sha8=_frame_sha8(state, frame, visual),
+        ok=ok,
+        camera_healthy=camera_healthy,
+        recognition=recognition,
+        summary=summary,
         face_age_s=face_age,
         frame_age_s=frame_age,
         visual_age_s=visual_age,
-        vision_health=_vision_health(face, visual, kpt),
+        vision_health=vision_health,
+        device=device,
+        frame_sha8=sha8,
+        face_confidence=conf,
+        face_audience=audience,
+        receipt_id=rid,
+        ts=t,
+        evidence=evidence,
     )
-
     if write_receipt:
         state.mkdir(parents=True, exist_ok=True)
-        with (state / _LEDGER).open("a", encoding="utf-8") as f:
-            f.write(json.dumps(proof.to_json(), sort_keys=True) + "\n")
-
+        row = proof.to_dict()
+        row["kind"] = "CAMERA_UNIFIED_FIELD_PROOF"
+        with (state / "camera_unified_field_proof.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
     return proof
 
 
-__all__ = [
-    "CameraUnifiedFieldProof",
-    "TRUTH_LABEL",
-    "build_camera_unified_field_proof",
-]
+def proof_text(state_dir: str | Path | None = None, *, stale_s: float = 300.0) -> str:
+    """Small helper for labels and diagnostics."""
+    return build_camera_unified_field_proof(state_dir, stale_s=stale_s).summary

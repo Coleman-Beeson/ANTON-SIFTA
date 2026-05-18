@@ -1,0 +1,13 @@
+{
+  "export_path": "/Users/computer/Documents/GitHub/ANTON-SIFTA/data/dpo_train.jsonl",
+  "exported": 0,
+  "min_pairs": 10,
+  "pending_curation": 0,
+  "ready_for_training": false,
+  "rejected": 0,
+  "rejected_rows": [],
+  "schema": "SIFTA_DPO_CURATION_REPORT_V1",
+  "source_ledger": "/Users/computer/Documents/GitHub/ANTON-SIFTA/.sifta_state/dpo_pairs.jsonl",
+  "total_source_pairs": 0,
+  "ts": 1778831665.18474
+}

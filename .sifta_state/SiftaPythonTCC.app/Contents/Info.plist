@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>SiftaPythonTCC</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>(c) 2001-2020 Python Software Foundation.</string>
+	<key>CFBundleHelpTOCFile</key>
+	<string>index.html</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleVersion</key>
+	<string>3.9.6</string>
+	<key>CFBundleShortVersionString</key>
+	<string>3.9.6</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeOSTypes</key>
+			<array>
+				<string>****</string>
+				<string>fold</string>
+				<string>disk</string>
+			</array>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+		</dict>
+	</array>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleIconFile</key>
+	<string>PythonInterpreter.icns</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>CFBundleHelpBookName</key>
+	<string>MacPython Help</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleExecutable</key>
+	<string>Python</string>
+	<key>NSAppleScriptEnabled</key>
+	<true/>
+	<key>CFBundleLongVersionString</key>
+	<string>3.9.6, (c) 2001-2021 Python Software Foundation.</string>
+	<key>CFBundleHelpBookFolder</key>
+	<array>
+		<string>Documentation</string>
+		<string>PythonDocumentation</string>
+	</array>
+	<key>CFBundleIdentifier</key>
+	<string>com.antonpictures.siftapython.tcc</string>
+	<key>CFBundleSignature</key>
+	<string>PytX</string>
+	<key>LSRequiresCarbon</key>
+	<true/>
+	<key>CSResourcesFileMapped</key>
+	<true/>
+	<key>CFBundleGetInfoString</key>
+	<string>3.9.6, (c) 2001-2020 Python Software Foundation.</string>
+	<key>CFBundleDisplayName</key>
+	<string>SiftaPythonTCC</string>
+	<key>NSCameraUsageDescription</key>
+	<string>SIFTA needs Camera access for Alice's visual organ on this local Mac.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>SIFTA needs Microphone access for Alice's auditory organ on this local Mac.</string>
+</dict>
+</plist>

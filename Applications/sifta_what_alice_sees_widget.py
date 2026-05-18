@@ -95,7 +95,7 @@ from System.swarm_visual_acuity_budget import (
     build_visual_acuity_budget,
 )
 
-_REPAIR_LEDGER = Path("/Users/ioanganton/Music/ANTON_SIFTA/repair_log.jsonl")
+_REPAIR_LEDGER = _REPO / "repair_log.jsonl"
 
 # ── Photon-derived stigmergic ledger ─────────────────────────────────────────
 _VISUAL_STIGMERGY_LOG = _REPO / ".sifta_state" / "visual_stigmergy.jsonl"
@@ -1264,6 +1264,7 @@ class WhatAliceSeesWidget(SiftaBaseWidget):
         # so the canvas is not spammed with identical "Access to camera not granted".
         self._last_camera_err_norm: str = ""
         self._last_camera_err_at: float = 0.0
+        self._last_qcamera_restart_at: float = 0.0
         self._camera: Optional[QCamera] = None
         self._sink = QVideoSink(self)
         self._session = QMediaCaptureSession(self)
@@ -1278,7 +1279,7 @@ class WhatAliceSeesWidget(SiftaBaseWidget):
         # These must exist before timers start or _refresh_cameras() selects
         # a camera. Qt can synchronously fire currentIndexChanged during first
         # selection, which calls _on_cam_changed() and reads this guard.
-        self._root = Path("/Users/ioanganton/Music/ANTON_SIFTA")
+        self._root = _REPO
         self._saccade_target_json_path = (
             self._root / ".sifta_state" / "active_saccade_target.json"
         )
@@ -1337,6 +1338,7 @@ class WhatAliceSeesWidget(SiftaBaseWidget):
 
         # Frame-received → update title status.
         self._canvas.frameReceived.connect(self._on_frame_meta)
+        self.make_timer(5_000, self._camera_frame_watchdog)
 
         # ── Motor Cortex LED-wink subscriber ────────────────────────────────
         # Tail .sifta_state/motor_pulses.jsonl and, whenever a pulse with
@@ -1427,12 +1429,19 @@ class WhatAliceSeesWidget(SiftaBaseWidget):
                 pass
             return
         
-        # Insert explicit OFF state so the camera doesn't turn on automatically without Alice's consent.
+        eye_deferred = os.environ.get("SIFTA_ALICE_UNIFIED_DEFER_EYE", "0").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+
+        # Keep an explicit OFF state for owner-directed shutdown, but §7.8
+        # says Alice's eye opens at boot unless the env override explicitly
+        # defers it for a real hardware/TCC failure.
         self._cam_combo.addItem("(Eye Closed - Off)", "OFF")
         
         for d in ranked:
             self._cam_combo.addItem(d.description(), d.id())
-        # Restore prior pick if still present, else default to OFF (index 0).
+        # Restore prior pick if still present, else default to the first real
+        # camera unless SIFTA_ALICE_UNIFIED_DEFER_EYE explicitly requests OFF.
         restored = False
         if current_id is not None:
             pos = self._cam_combo.findData(current_id)
@@ -1441,8 +1450,11 @@ class WhatAliceSeesWidget(SiftaBaseWidget):
                 restored = True
         self._cam_combo.blockSignals(False)
         if not restored:
-            self._cam_combo.setCurrentIndex(0)
-            self._on_cam_changed(0)
+            default_idx = 0 if eye_deferred else min(1, self._cam_combo.count() - 1)
+            self._cam_combo.blockSignals(True)
+            self._cam_combo.setCurrentIndex(default_idx)
+            self._cam_combo.blockSignals(False)
+            self._on_cam_changed(default_idx)
 
     def _on_cam_changed(self, _idx: int) -> None:
         dev_id = self._cam_combo.currentData()
@@ -1741,6 +1753,43 @@ class WhatAliceSeesWidget(SiftaBaseWidget):
             except Exception:
                 pass
 
+    def _camera_frame_watchdog(self) -> None:
+        """Restart QCamera if the selected real camera stops delivering frames."""
+        if self._camera is None:
+            return
+        dev_id = self._cam_combo.currentData()
+        if dev_id in (None, "OFF"):
+            return
+        now = time.time()
+        last_frame_ts = float(getattr(self._canvas, "_last_ledger_ts", 0.0) or 0.0)
+        if last_frame_ts and now - last_frame_ts < 15.0:
+            return
+        if now - self._last_qcamera_restart_at < 30.0:
+            return
+        self._last_qcamera_restart_at = now
+        dev_name = self._cam_combo.currentText()
+        try:
+            self._camera.stop()
+            QTimer.singleShot(250, self._camera.start)
+            self._canvas.set_chyron(
+                f"↻ Camera stream watchdog restarted {dev_name}",
+                QColor(255, 200, 90),
+            )
+            try:
+                from System.ledger_append import append_jsonl_line
+                append_jsonl_line(_REPO / ".sifta_state" / "ide_stigmergic_trace.jsonl", {
+                    "system": "what_alice_sees",
+                    "event": "camera_watchdog_restart",
+                    "device": dev_name,
+                    "reason": "frame_stream_stale",
+                    "frame_age_s": None if not last_frame_ts else round(now - last_frame_ts, 3),
+                    "ts": now,
+                })
+            except Exception:
+                pass
+        except Exception as exc:
+            self._canvas.set_error(f"Camera watchdog restart failed: {type(exc).__name__}: {exc}")
+
     def _on_vision_body_probe_click(self) -> None:
         if self._vision_body_worker is not None and self._vision_body_worker.isRunning():
             return
@@ -2000,8 +2049,15 @@ class WhatAliceSeesWidget(SiftaBaseWidget):
                     return i
         # 3) raw index — last resort
         idx = rec.get("index")
-        if isinstance(idx, int) and 0 <= idx < self._cam_combo.count():
-            return idx
+        if isinstance(idx, int):
+            # The combobox has an owner-visible OFF row at UI index 0, while
+            # camera-target ledgers use hardware/cv indexes where 0 means the
+            # first real camera. Never let a legacy index-0 saccade close the
+            # eye by selecting OFF.
+            offset = 1 if self._cam_combo.count() > 0 and self._cam_combo.itemData(0) == "OFF" else 0
+            combo_idx = idx + offset
+            if 0 <= combo_idx < self._cam_combo.count():
+                return combo_idx
         return -1
 
     def _poll_camera_yield(self) -> None:
